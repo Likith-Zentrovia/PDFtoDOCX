@@ -1,11 +1,13 @@
 """
 PDF Layout Analyzer using Claude Vision
 
-Uses Claude Vision ONLY to analyze page layout complexity:
+Uses Claude Vision to analyze page layout complexity:
 - Number of columns
 - Column boundaries (percentages)
 - Header/footer regions
-- General structure
+- Tables with boundaries
+- Image regions
+- Element positioning for accurate reconstruction
 
 Does NOT extract any text content - that's done by Python.
 """
@@ -13,9 +15,27 @@ Does NOT extract any text content - that's done by Python.
 import os
 import base64
 from typing import Optional, List, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import fitz  # PyMuPDF
 import anthropic
+
+
+@dataclass
+class TableRegion:
+    """Information about a detected table region."""
+    bbox_pct: Dict[str, float]  # {x_start, y_start, x_end, y_end} as percentages
+    approx_rows: int
+    approx_cols: int
+    has_header_row: bool
+
+
+@dataclass
+class ImageRegion:
+    """Information about a detected image region."""
+    bbox_pct: Dict[str, float]  # {x_start, y_start, x_end, y_end} as percentages
+    position_type: str  # "inline", "float_left", "float_right", "full_width", "centered"
+    near_text_above: bool  # Is there text immediately above?
+    near_text_below: bool  # Is there text immediately below?
 
 
 @dataclass
@@ -31,6 +51,9 @@ class LayoutInfo:
     has_sidebar: bool
     sidebar_position: str  # "left", "right", "none"
     complexity: str  # "simple", "moderate", "complex"
+    tables: List[TableRegion] = field(default_factory=list)
+    images: List[ImageRegion] = field(default_factory=list)
+    element_order: List[Dict[str, Any]] = field(default_factory=list)  # Ordered list of element regions
 
 
 @dataclass
@@ -50,9 +73,9 @@ class LayoutAnalyzer:
     This is a quick analysis to guide the Python extraction.
     """
 
-    LAYOUT_PROMPT = """Analyze this PDF page layout ONLY. Do NOT extract or read any text content.
+    LAYOUT_PROMPT = """Analyze this PDF page layout structure. Do NOT extract or read any text content.
 
-Return a JSON object with ONLY this structure:
+Return a JSON object with this structure:
 {
     "num_columns": <1, 2, or 3>,
     "column_boundaries": [
@@ -64,17 +87,45 @@ Return a JSON object with ONLY this structure:
     "footer_height_pct": <0-15>,
     "has_sidebar": <true/false>,
     "sidebar_position": "left" | "right" | "none",
-    "complexity": "simple" | "moderate" | "complex"
+    "complexity": "simple" | "moderate" | "complex",
+    "tables": [
+        {
+            "bbox_pct": {"x_start": <0-100>, "y_start": <0-100>, "x_end": <0-100>, "y_end": <0-100>},
+            "approx_rows": <number>,
+            "approx_cols": <number>,
+            "has_header_row": <true/false>
+        }
+    ],
+    "images": [
+        {
+            "bbox_pct": {"x_start": <0-100>, "y_start": <0-100>, "x_end": <0-100>, "y_end": <0-100>},
+            "position_type": "inline" | "float_left" | "float_right" | "full_width" | "centered",
+            "near_text_above": <true/false>,
+            "near_text_below": <true/false>
+        }
+    ],
+    "element_order": [
+        {"type": "text", "y_start_pct": <0-100>, "y_end_pct": <0-100>, "column": <1-3 or 0 for full width>},
+        {"type": "image", "y_start_pct": <0-100>, "y_end_pct": <0-100>, "index": <0-based index in images array>},
+        {"type": "table", "y_start_pct": <0-100>, "y_end_pct": <0-100>, "index": <0-based index in tables array>}
+    ]
 }
 
 Rules:
 - num_columns: Count main content columns (1, 2, or 3)
 - column_boundaries: X positions as percentages (0=left edge, 100=right edge)
-- For single column: [{"x_start": 5, "x_end": 95}]
-- For two columns: [{"x_start": 5, "x_end": 48}, {"x_start": 52, "x_end": 95}]
-- header_height_pct: Height of header area as % of page (0 if no header)
-- footer_height_pct: Height of footer area as % of page (0 if no footer)
-- complexity: "simple"=single column, "moderate"=2 columns, "complex"=3+ or irregular
+- tables: List ALL visible tables with their bounding boxes and structure
+- images: List ALL visible images/figures/charts with their positions
+- element_order: List elements from TOP to BOTTOM of page in visual reading order
+  - Include text regions, images, and tables
+  - This helps reconstruct the exact page layout
+- bbox_pct values are percentages of page dimensions (0-100)
+- position_type for images:
+  - "full_width": spans entire content width
+  - "centered": centered on page, may have text above/below
+  - "float_left"/"float_right": text wraps around
+  - "inline": small image within text flow
+- complexity: "simple"=single column no tables, "moderate"=2 columns or few tables, "complex"=3+ columns or many elements
 
 Respond with ONLY the JSON, no explanation."""
 
@@ -130,7 +181,7 @@ Respond with ONLY the JSON, no explanation."""
                 idx = pages_to_analyze.index(i)
                 all_layouts.append(page_layouts[idx])
             else:
-                # Use template with correct page number
+                # Use template with correct page number (tables/images/element_order empty for non-analyzed pages)
                 all_layouts.append(LayoutInfo(
                     page_num=i,
                     num_columns=dominant_cols,
@@ -141,7 +192,10 @@ Respond with ONLY the JSON, no explanation."""
                     footer_height_pct=template.footer_height_pct,
                     has_sidebar=template.has_sidebar,
                     sidebar_position=template.sidebar_position,
-                    complexity=template.complexity
+                    complexity=template.complexity,
+                    tables=[],  # Can't know tables for non-analyzed pages
+                    images=[],  # Can't know images for non-analyzed pages
+                    element_order=[]  # Will be determined from extraction
                 ))
 
         return DocumentLayout(
@@ -155,8 +209,8 @@ Respond with ONLY the JSON, no explanation."""
         """Analyze a single page layout."""
         page = doc[page_num]
 
-        # Render at low resolution for quick analysis
-        zoom = 1.0  # 72 DPI is enough for layout analysis
+        # Render at higher resolution for better layout analysis
+        zoom = 1.5  # ~108 DPI for better detail
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         img_bytes = pix.tobytes("png")
         img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
@@ -164,7 +218,7 @@ Respond with ONLY the JSON, no explanation."""
         try:
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=500,
+                max_tokens=2000,  # More tokens for detailed layout info
                 messages=[{
                     "role": "user",
                     "content": [
@@ -183,6 +237,26 @@ Respond with ONLY the JSON, no explanation."""
             import json
             data = json.loads(text.strip())
 
+            # Parse table regions
+            tables = []
+            for t in data.get("tables", []):
+                tables.append(TableRegion(
+                    bbox_pct=t.get("bbox_pct", {"x_start": 0, "y_start": 0, "x_end": 100, "y_end": 100}),
+                    approx_rows=t.get("approx_rows", 1),
+                    approx_cols=t.get("approx_cols", 1),
+                    has_header_row=t.get("has_header_row", False)
+                ))
+
+            # Parse image regions
+            images = []
+            for img in data.get("images", []):
+                images.append(ImageRegion(
+                    bbox_pct=img.get("bbox_pct", {"x_start": 0, "y_start": 0, "x_end": 100, "y_end": 100}),
+                    position_type=img.get("position_type", "centered"),
+                    near_text_above=img.get("near_text_above", True),
+                    near_text_below=img.get("near_text_below", True)
+                ))
+
             return LayoutInfo(
                 page_num=page_num,
                 num_columns=data.get("num_columns", 1),
@@ -193,11 +267,14 @@ Respond with ONLY the JSON, no explanation."""
                 footer_height_pct=data.get("footer_height_pct", 0),
                 has_sidebar=data.get("has_sidebar", False),
                 sidebar_position=data.get("sidebar_position", "none"),
-                complexity=data.get("complexity", "simple")
+                complexity=data.get("complexity", "simple"),
+                tables=tables,
+                images=images,
+                element_order=data.get("element_order", [])
             )
 
         except Exception as e:
-            print(f"    Warning: Vision analysis failed for page {page_num + 1}, using default")
+            print(f"    Warning: Vision analysis failed for page {page_num + 1}: {e}")
             return self._default_layout(page_num)
 
     def _default_layout(self, page_num: int) -> LayoutInfo:
@@ -212,5 +289,8 @@ Respond with ONLY the JSON, no explanation."""
             footer_height_pct=0,
             has_sidebar=False,
             sidebar_position="none",
-            complexity="simple"
+            complexity="simple",
+            tables=[],
+            images=[],
+            element_order=[]
         )
