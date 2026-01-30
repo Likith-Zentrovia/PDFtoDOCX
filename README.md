@@ -1,16 +1,16 @@
-# PDF to DOCX Converter
+# PDF to DOCX Converter v2.0
 
-A high-fidelity PDF to DOCX converter that runs locally via command line. Preserves text formatting, images, tables, and layout structure with maximum accuracy.
+A high-fidelity PDF to DOCX converter with **multi-column layout preservation**, **structure analysis**, and **content validation**. Runs locally via command line with zero content loss.
 
-## Features
+## Key Features
 
-- **Text Preservation**: Maintains font family, size, weight (bold), style (italic), color, and underline
-- **Image Handling**: Extracts and positions images accurately within the document
-- **Table Detection**: Automatically detects and recreates table structures with proper cell formatting
-- **Layout Retention**: Preserves margins, columns, spacing, and page structure
-- **Batch Processing**: Convert multiple PDFs at once or entire directories
-- **Page Selection**: Convert specific pages or page ranges
-- **Zero Content Loss**: Designed for 100% content preservation
+- **Multi-Column Layout Preservation** - Accurately detects and recreates 2-column, 3-column, and complex layouts
+- **Structure Analysis** - Scans PDF structure page-by-page to understand layout before conversion
+- **Content Validation** - Compares output with original to ensure no content loss
+- **Post-Processing Cleanup** - Removes blank pages, fixes spacing issues automatically
+- **Text Formatting** - Preserves font family, size, bold, italic, color, underline
+- **Image Handling** - Extracts and positions images accurately
+- **Table Detection** - Recreates table structures with proper formatting
 
 ## Installation
 
@@ -21,210 +21,281 @@ A high-fidelity PDF to DOCX converter that runs locally via command line. Preser
 
 ### Setup
 
-1. Clone the repository:
 ```bash
+# Clone the repository
 git clone https://github.com/yourusername/PDFtoDOCX.git
 cd PDFtoDOCX
-```
 
-2. Create a virtual environment (recommended):
-```bash
+# Create virtual environment (recommended)
 python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# On Linux/Mac:
-source venv/bin/activate
-
-# On Windows:
-venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Usage
+## Quick Start
 
-### Basic Conversion
-
-Convert a single PDF file (output will be saved as `document.docx` in the same location):
-
+### Basic Conversion (Simple PDFs)
 ```bash
 python convert.py document.pdf
 ```
 
-### Specify Output Path
+### Advanced Conversion (Multi-Column PDFs) - RECOMMENDED
+```bash
+python convert.py document.pdf --advanced
+```
+
+### With Validation and Cleanup
+```bash
+python convert.py document.pdf --advanced --validate --cleanup
+```
+
+## Usage Modes
+
+### 1. Standard Mode
+Fast conversion using pdf2docx library. Best for simple, single-column documents.
 
 ```bash
-python convert.py document.pdf -o /path/to/output.docx
+python convert.py document.pdf
+python convert.py document.pdf -o output.docx
 ```
 
-### Convert Specific Pages
-
-Pages are 0-indexed (first page is 0):
+### 2. Advanced Mode (Recommended for Complex PDFs)
+Uses custom structure analyzer for multi-column layout preservation.
 
 ```bash
-# Convert pages 1, 2, and 3 (0-indexed)
-python convert.py document.pdf --pages 0,1,2
-
-# Convert a range of pages
-python convert.py document.pdf --pages 0-5
-
-# Mix of specific pages and ranges
-python convert.py document.pdf --pages 0,2-4,7,9-12
+python convert.py document.pdf --advanced
+python convert.py document.pdf --advanced --quality high
 ```
 
-### Convert Page Range
+Quality levels:
+- `draft` - Fast conversion, basic formatting
+- `standard` - Balanced quality and speed
+- `high` - Maximum fidelity (default)
+
+### 3. Analyze Mode
+Analyze PDF structure without converting. Useful for understanding document layout.
 
 ```bash
-# Convert from page 2 to page 10 (0-indexed, end is exclusive)
-python convert.py document.pdf --start 2 --end 10
+python convert.py document.pdf --analyze
+python convert.py document.pdf --analyze --detailed
 ```
 
-### Batch Conversion
+Example output:
+```
+Analyzing: document.pdf
+------------------------------------------------------------
+Total Pages: 10
+Dominant Layout: two_column
+Consistent Layout: No (mixed layouts)
 
-Convert multiple files:
+Layout Distribution:
+  two_column: 7 pages (70%)
+  single_column: 2 pages (20%)
+  three_column: 1 pages (10%)
+
+Summary:
+  Total Text Blocks: 245
+  Total Images: 12
+  Multi-Column Pages: 8
+
+Recommendations:
+  - Use --advanced mode for best multi-column preservation
+  - Images will be extracted and positioned in output
+  - Mixed layouts detected - consider page-by-page review
+```
+
+### 4. Validation Mode
+Validate conversion by comparing content with original PDF.
 
 ```bash
-python convert.py file1.pdf file2.pdf file3.pdf
+# Convert and validate
+python convert.py document.pdf --validate
 
-# With output directory
-python convert.py file1.pdf file2.pdf -o /output/directory/
+# Compare existing files
+python convert.py document.pdf --compare existing.docx
 ```
 
-### Directory Conversion
-
-Convert all PDFs in a directory:
+### 5. Cleanup Mode
+Remove blank pages and fix formatting issues.
 
 ```bash
-# Convert all PDFs in a directory
-python convert.py --dir /path/to/pdfs/
+# Convert with cleanup
+python convert.py document.pdf --cleanup
 
-# Convert recursively (including subdirectories)
-python convert.py --dir /path/to/pdfs/ -r
-
-# Specify output directory
-python convert.py --dir /path/to/pdfs/ -o /output/directory/
-```
-
-### Show PDF Information
-
-Display PDF metadata before converting:
-
-```bash
-python convert.py document.pdf --info
-```
-
-### Quiet Mode
-
-Suppress progress output:
-
-```bash
-python convert.py document.pdf -q
-```
-
-## Python API Usage
-
-You can also use the converter programmatically in your Python code:
-
-```python
-from pdf_converter import PDFConverter
-
-# Create converter instance
-converter = PDFConverter(verbose=True)
-
-# Convert a single file
-result = converter.convert("input.pdf", "output.docx")
-
-if result.success:
-    print(f"Converted {result.pages_converted} pages to {result.output_path}")
-else:
-    print(f"Error: {result.error_message}")
-
-# Convert specific pages
-result = converter.convert("input.pdf", pages=[0, 1, 2])
-
-# Batch convert multiple files
-results = converter.batch_convert(["file1.pdf", "file2.pdf"])
-
-# Convert all PDFs in a directory
-results = converter.convert_directory("/path/to/pdfs", recursive=True)
-
-# Get PDF information
-info = converter.get_pdf_info("document.pdf")
-print(f"Pages: {info['page_count']}")
-print(f"Images: {sum(p['image_count'] for p in info['pages'])}")
-```
-
-### Quick Conversion Function
-
-For simple one-off conversions:
-
-```python
-from pdf_converter.converter import convert_pdf_to_docx
-
-result = convert_pdf_to_docx("document.pdf")
-print(f"Output: {result.output_path}")
+# Cleanup existing DOCX
+python convert.py --cleanup-only existing.docx
 ```
 
 ## Command Line Options
 
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--output` | `-o` | Output file path or directory |
-| `--pages` | `-p` | Specific pages to convert (e.g., "0,1,2" or "0-5") |
-| `--start` | | Start page (0-indexed) |
-| `--end` | | End page (0-indexed, exclusive) |
-| `--dir` | `-d` | Directory containing PDFs to convert |
-| `--recursive` | `-r` | Process subdirectories recursively |
-| `--info` | | Show PDF information before converting |
-| `--quiet` | `-q` | Suppress progress output |
-| `--version` | `-v` | Show version number |
+| Option | Description |
+|--------|-------------|
+| `--advanced` | Use advanced converter with layout preservation |
+| `--analyze` | Analyze PDF structure only (no conversion) |
+| `--detailed` | Show detailed per-page analysis |
+| `--validate` | Validate conversion against original |
+| `--cleanup` | Run post-processing cleanup |
+| `--compare DOCX` | Compare PDF with existing DOCX |
+| `--cleanup-only DOCX` | Cleanup existing DOCX (no conversion) |
+| `--quality LEVEL` | Conversion quality (draft/standard/high) |
+| `-o, --output PATH` | Output file path |
+| `-p, --pages PAGES` | Specific pages (e.g., "0,1,2" or "0-5") |
+| `-q, --quiet` | Suppress progress output |
+
+## Python API
+
+### Standard Conversion
+```python
+from pdf_converter import PDFConverter
+
+converter = PDFConverter()
+result = converter.convert("input.pdf", "output.docx")
+
+if result.success:
+    print(f"Converted {result.pages_converted} pages")
+```
+
+### Advanced Conversion with Layout Preservation
+```python
+from pdf_converter import AdvancedPDFConverter
+from pdf_converter.advanced_converter import ConversionQuality
+
+converter = AdvancedPDFConverter(quality=ConversionQuality.HIGH)
+output_path, stats, validation = converter.convert(
+    "input.pdf",
+    "output.docx",
+    validate=True
+)
+
+print(f"Text blocks converted: {stats.text_blocks_converted}")
+print(f"Columns preserved: {stats.columns_preserved}")
+print(f"Validation passed: {validation.is_valid}")
+```
+
+### PDF Structure Analysis
+```python
+from pdf_converter import PDFAnalyzer
+
+with PDFAnalyzer("document.pdf") as analyzer:
+    structure = analyzer.analyze()
+
+    print(f"Pages: {structure.page_count}")
+    print(f"Layout: {structure.dominant_layout.value}")
+
+    for page in structure.pages:
+        print(f"Page {page.page_num + 1}: {page.layout_type.value}")
+        print(f"  Columns: {len(page.columns)}")
+        print(f"  Text blocks: {len(page.text_blocks)}")
+```
+
+### Post-Processing
+```python
+from pdf_converter import PostProcessor, ConversionValidator
+
+# Cleanup document
+processor = PostProcessor()
+result = processor.cleanup_document("output.docx")
+print(f"Blank paragraphs removed: {result.blank_paragraphs_removed}")
+
+# Validate conversion
+validator = ConversionValidator()
+report = validator.full_validation("input.pdf", "output.docx")
+print(f"Content match: {report['content_match']:.1f}%")
+```
 
 ## How It Works
 
-The converter uses the `pdf2docx` library which leverages:
+### 1. Structure Analysis
+The converter first analyzes the PDF structure:
+- Detects column layouts (single, double, triple, mixed)
+- Identifies text blocks and their positions
+- Maps reading order for multi-column content
+- Locates headers, footers, and images
 
-1. **PyMuPDF (fitz)**: For parsing PDF structure, extracting text, images, and detecting layout
-2. **python-docx**: For generating the DOCX output with proper formatting
+### 2. Layout-Aware Conversion
+Based on the analysis:
+- Single-column pages are converted directly
+- Multi-column pages use table-based layout preservation
+- Images are extracted and positioned
+- Text formatting is mapped to DOCX equivalents
 
-### Conversion Process
+### 3. Post-Processing Validation
+After conversion:
+- Compares word content between PDF and DOCX
+- Identifies missing or misplaced content
+- Removes unnecessary blank elements
+- Reports issues and suggestions
 
-1. **Parse PDF**: Extract text blocks, images, tables, and layout information
-2. **Analyze Structure**: Detect paragraphs, headings, lists, and table structures
-3. **Map Formatting**: Convert PDF styling (fonts, colors, sizes) to DOCX equivalents
-4. **Position Elements**: Place images and tables with accurate positioning
-5. **Generate DOCX**: Create the output document with all preserved formatting
+## Handling Complex Documents
 
-## Limitations
+### Multi-Column Layouts
+For documents with 2 or 3 columns (like academic papers, newsletters):
+```bash
+python convert.py paper.pdf --advanced --validate
+```
 
-While the converter achieves high fidelity, some edge cases may have limitations:
+### Mixed Layouts
+For documents with varying layouts per page:
+```bash
+python convert.py document.pdf --analyze --detailed  # First, understand structure
+python convert.py document.pdf --advanced --cleanup
+```
 
-- **Complex layouts**: Very complex multi-column layouts may need manual adjustment
-- **Custom fonts**: If the original PDF uses custom fonts not available on your system, a similar font will be substituted
-- **Scanned PDFs**: PDFs that are scanned images (not searchable) require OCR (not included)
-- **Form fields**: Interactive PDF form fields are converted to static content
-- **Annotations**: PDF annotations may not be fully preserved
+### Large Documents
+For documents with many pages:
+```bash
+# Convert in batches
+python convert.py large.pdf --pages 0-50 -o part1.docx
+python convert.py large.pdf --pages 50-100 -o part2.docx
+```
 
 ## Troubleshooting
 
-### "No module named 'pdf2docx'"
-Make sure you've installed the dependencies:
+### "Content match below 85%"
+- Check if PDF contains scanned images (requires OCR)
+- Try `--advanced` mode for complex layouts
+- Review specific pages with `--analyze --detailed`
+
+### Blank pages in output
 ```bash
-pip install -r requirements.txt
+python convert.py document.pdf --cleanup
+# Or fix existing file
+python convert.py --cleanup-only output.docx
 ```
 
-### Conversion takes a long time
-Large PDFs with many images take longer to process. Use `--pages` to convert specific pages for testing.
-
-### Output formatting looks different
-Try converting with the `--info` flag to check the PDF structure. Some PDFs have unusual formatting that may not convert perfectly.
-
-### Memory errors on large PDFs
-For very large PDFs, try converting in batches of pages:
+### Columns not preserved
 ```bash
-python convert.py large.pdf --pages 0-50 -o part1.docx
-python convert.py large.pdf --pages 50-100 -o part2.docx
+python convert.py document.pdf --advanced --quality high
+```
+
+### Missing images
+- Ensure PDF contains extractable images (not scanned)
+- Check for image extraction errors in output
+
+## Limitations
+
+- **Scanned PDFs**: Image-based PDFs require OCR (not included)
+- **Complex Graphics**: Vector graphics may not convert perfectly
+- **Custom Fonts**: Substituted with similar system fonts if unavailable
+- **Form Fields**: Converted to static content
+- **Very Complex Layouts**: May need manual adjustment
+
+## Project Structure
+
+```
+PDFtoDOCX/
+├── convert.py                 # CLI entry point
+├── pdf_converter/
+│   ├── __init__.py           # Package exports
+│   ├── converter.py          # Standard converter (pdf2docx)
+│   ├── analyzer.py           # PDF structure analyzer
+│   ├── advanced_converter.py # Advanced layout-preserving converter
+│   └── postprocessor.py      # Validation and cleanup
+├── requirements.txt          # Dependencies
+├── test_installation.py      # Installation verification
+└── README.md                 # Documentation
 ```
 
 ## Contributing
