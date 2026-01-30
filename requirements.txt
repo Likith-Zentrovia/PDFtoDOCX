@@ -1,19 +1,19 @@
 # PDF to DOCX Converter Dependencies
 
-# Core conversion library - handles PDF parsing and DOCX generation
-pdf2docx>=0.5.8
+# Anthropic API for Claude Vision analysis
+anthropic>=0.39.0
 
-# PDF processing (dependency of pdf2docx, but explicitly listed for clarity)
+# PDF processing
 PyMuPDF>=1.24.0
 
-# DOCX manipulation (for any post-processing needs)
+# DOCX generation
 python-docx>=1.1.0
 
-# CLI interface
-click>=8.1.0
+# Image processing
+Pillow>=10.0.0
 
-# Progress bar for large files
+# Progress bar
 tqdm>=4.66.0
 
-# Image processing (for image optimization if needed)
-Pillow>=10.0.0
+# Optional: pdf2docx for fallback
+pdf2docx>=0.5.8

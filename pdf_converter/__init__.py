@@ -1,28 +1,32 @@
 """
-PDF to DOCX Converter Package
+PDF to DOCX Converter Package - v3.0
 
-A high-fidelity PDF to DOCX converter that preserves:
-- Text formatting (font, size, weight, style, color)
-- Images with accurate positioning
-- Tables with proper structure
-- Multi-column layouts
-- Page layout and structure
+Intelligent PDF to DOCX conversion powered by Claude Vision AI.
+
+Features:
+- Visual analysis of each page using Claude Vision
+- Multi-column layout detection and preservation
+- Accurate text formatting (font, size, style, color)
+- Image extraction and positioning
+- Table detection and recreation
+- Automatic validation
+
+Usage:
+    from pdf_converter import convert_pdf
+
+    result = convert_pdf("document.pdf")
+    print(f"Saved to: {result.output_path}")
 """
 
-from .converter import PDFConverter, convert_pdf_to_docx
-from .analyzer import PDFAnalyzer, PageLayout, LayoutType
-from .advanced_converter import AdvancedPDFConverter, convert_with_layout_preservation
-from .postprocessor import PostProcessor, ConversionValidator
+from .intelligent_converter import IntelligentConverter, convert_pdf, ConversionResult
+from .vision_analyzer import ClaudeVisionAnalyzer, DocumentAnalysis, PageAnalysis
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __all__ = [
-    "PDFConverter",
-    "convert_pdf_to_docx",
-    "PDFAnalyzer",
-    "PageLayout",
-    "LayoutType",
-    "AdvancedPDFConverter",
-    "convert_with_layout_preservation",
-    "PostProcessor",
-    "ConversionValidator"
+    "convert_pdf",
+    "IntelligentConverter",
+    "ConversionResult",
+    "ClaudeVisionAnalyzer",
+    "DocumentAnalysis",
+    "PageAnalysis"
 ]
