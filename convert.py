@@ -42,7 +42,7 @@ Environment:
     parser.add_argument('pdf_file', help='PDF file to convert')
     parser.add_argument('-o', '--output', help='Output DOCX path')
     parser.add_argument('-k', '--api-key', help='Anthropic API key')
-    parser.add_argument('-v', '--version', action='version', version='3.0.0')
+    parser.add_argument('-v', '--version', action='version', version='4.0.0')
 
     args = parser.parse_args()
 

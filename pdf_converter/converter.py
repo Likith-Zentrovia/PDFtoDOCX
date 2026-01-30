@@ -25,6 +25,7 @@ class ConversionResult:
     pages: int
     text_blocks: int
     images: int
+    tables: int
     layout_type: str
     errors: List[str]
 
@@ -75,6 +76,7 @@ class PDFtoDOCXConverter:
                 pages=0,
                 text_blocks=0,
                 images=0,
+                tables=0,
                 layout_type="unknown",
                 errors=[f"File not found: {pdf_path}"]
             )
@@ -110,8 +112,12 @@ class PDFtoDOCXConverter:
 
         total_blocks = sum(len(p.text_blocks) for p in pages)
         total_images = sum(len(p.images) for p in pages)
+        total_tables = sum(len(p.tables) for p in pages)
+        total_elements = sum(len(p.elements) for p in pages)
         print(f"       Text blocks: {total_blocks}")
         print(f"       Images: {total_images}")
+        print(f"       Tables: {total_tables}")
+        print(f"       Total elements (ordered): {total_elements}")
 
         # Step 3: DOCX Generation
         print(f"\n[3/3] Generating DOCX...")
@@ -130,6 +136,7 @@ class PDFtoDOCXConverter:
             print(f"Pages:  {result.pages_processed}")
             print(f"Blocks: {result.text_blocks_written}")
             print(f"Images: {result.images_added}")
+            print(f"Tables: {result.tables_added}")
         else:
             print(f"FAILED")
             print(f"{'='*60}")
@@ -142,6 +149,7 @@ class PDFtoDOCXConverter:
             pages=result.pages_processed,
             text_blocks=result.text_blocks_written,
             images=result.images_added,
+            tables=result.tables_added,
             layout_type=f"{layout.dominant_columns}-column" if layout else "single-column",
             errors=errors
         )
