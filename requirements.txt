@@ -1,19 +1,9 @@
 # PDF to DOCX Converter Dependencies
 
-# Anthropic API for Claude Vision analysis
-anthropic>=0.39.0
-
-# PDF processing
+# Core (required)
 PyMuPDF>=1.24.0
-
-# DOCX generation
 python-docx>=1.1.0
-
-# Image processing
 Pillow>=10.0.0
 
-# Progress bar
-tqdm>=4.66.0
-
-# Optional: pdf2docx for fallback
-pdf2docx>=0.5.8
+# Optional - for multi-column layout detection
+anthropic>=0.39.0
