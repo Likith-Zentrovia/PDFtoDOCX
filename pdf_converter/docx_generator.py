@@ -176,7 +176,7 @@ class DOCXGenerator:
 
         # Calculate column widths
         total_width = 6.0  # Content width in inches
-        col_widths = self._calculate_column_widths(layout.column_boundaries, total_width)
+        col_widths = self._calculate_column_widths(layout.column_boundaries, total_width, num_cols)
 
         # Fill columns
         for col_idx in range(num_cols):
@@ -200,7 +200,8 @@ class DOCXGenerator:
     def _calculate_column_widths(
         self,
         boundaries: List[Dict[str, float]],
-        total_width: float
+        total_width: float,
+        num_cols: int = 2
     ) -> List[float]:
         """Calculate column widths from boundaries."""
         widths = []
@@ -210,9 +211,18 @@ class DOCXGenerator:
             width_pct = (x_end - x_start) / 100
             widths.append(width_pct * total_width)
 
-        # Ensure we have widths
+        # Ensure we have exactly num_cols widths
+        if len(widths) < num_cols:
+            # Fill with equal widths
+            default_width = total_width / num_cols
+            while len(widths) < num_cols:
+                widths.append(default_width)
+        elif len(widths) > num_cols:
+            widths = widths[:num_cols]
+
+        # Fallback if empty
         if not widths:
-            return [total_width]
+            return [total_width / num_cols] * num_cols
 
         return widths
 
