@@ -1,9 +1,5 @@
-# PDF to DOCX Converter Dependencies
+# PDF to DOCX Converter
 
-# Core (required)
+pdf2docx>=0.5.8
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
-Pillow>=10.0.0
-
-# Optional - for multi-column layout detection
-anthropic>=0.39.0

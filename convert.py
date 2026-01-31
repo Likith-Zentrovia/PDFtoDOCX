@@ -19,11 +19,16 @@ Works WITHOUT API key! API key only provides optional layout hints.
 
 import os
 import sys
-import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+def convert_pdf_to_docx(pdf_path: str, docx_path: str = None) -> bool:
+    """
+    Convert PDF to DOCX with maximum fidelity.
 
+    Uses pdf2docx library which is specifically designed for
+    accurate PDF to DOCX conversion.
+    """
+    from pdf2docx import Converter
 
 def main():
     parser = argparse.ArgumentParser(
@@ -71,6 +76,16 @@ Set ANTHROPIC_API_KEY only if you want optional layout hints.
             print(f"  - {err}")
         sys.exit(1)
 
+    # Check for output flag
+    docx_path = None
+    if "-o" in sys.argv:
+        idx = sys.argv.index("-o")
+        if idx + 1 < len(sys.argv):
+            docx_path = sys.argv[idx + 1]
 
-if __name__ == '__main__':
+    success = convert_pdf_to_docx(pdf_path, docx_path)
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
     main()
