@@ -1,10 +1,16 @@
 """
 PDF to DOCX Converter Package
 
-Converts PDF to DOCX with accurate layout preservation:
-- Claude Vision analyzes layout structure (columns, headers, etc.)
-- Python extracts all text and images from PDF
-- DOCX is generated matching the original structure
+Converts PDF to DOCX with accurate layout preservation.
+
+Key Features:
+- Works WITHOUT AI - pure Python extraction and conversion
+- Automatic column detection from text positions  
+- Tables extracted and rendered properly
+- Images placed at correct positions
+- Font formatting preserved
+
+Optional: Provide ANTHROPIC_API_KEY for layout hints (1 API call max)
 
 Usage:
     from pdf_converter import convert
@@ -13,5 +19,5 @@ Usage:
 
 from .converter import convert, PDFtoDOCXConverter, ConversionResult
 
-__version__ = "3.0.0"
+__version__ = "4.1.0"
 __all__ = ["convert", "PDFtoDOCXConverter", "ConversionResult"]

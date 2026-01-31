@@ -47,9 +47,7 @@ htmlcov/
 # Logs
 *.log
 
-# Output files (converted documents)
-*.docx
-!examples/*.docx
+
 
 # Temporary files
 *.tmp
