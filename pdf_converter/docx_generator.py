@@ -207,7 +207,8 @@ class DOCXGenerator:
                     self._add_vertical_space(spacing_pts)
 
             if elem.element_type == ElementType.TEXT:
-                self._add_text_block(elem.element, page.width)
+                if not self._skip_header_footer_block(elem.element):
+                    self._add_text_block(elem.element, page.width)
                 prev_font_size = elem.element.primary_font_size
             elif elem.element_type == ElementType.IMAGE:
                 self._add_image(elem.element, page.width)
@@ -262,7 +263,8 @@ class DOCXGenerator:
             if chunk['type'] == 'full_width':
                 elem = chunk['element']
                 if elem.element_type == ElementType.TEXT:
-                    self._add_text_block(elem.element, page.width)
+                    if not self._skip_header_footer_block(elem.element):
+                        self._add_text_block(elem.element, page.width)
                 elif elem.element_type == ElementType.IMAGE:
                     self._add_image(elem.element, page.width)
                 elif elem.element_type == ElementType.TABLE:
@@ -323,7 +325,8 @@ class DOCXGenerator:
                                 p.paragraph_format.space_before = Pt(0)
 
                     if elem.element_type == ElementType.TEXT:
-                        self._add_text_block_to_cell(cell, elem.element, page.width)
+                        if not self._skip_header_footer_block(elem.element):
+                            self._add_text_block_to_cell(cell, elem.element, page.width)
                     elif elem.element_type == ElementType.IMAGE:
                         self._add_image_to_cell(cell, elem.element, col_widths[col_idx] * 72)  # Convert to points
 
@@ -422,7 +425,8 @@ class DOCXGenerator:
                 self._add_vertical_space(min((y_pos - prev_y) / 3, 18))
             
             if item_type == 'text':
-                self._add_text_block(item, page.width)
+                if not self._skip_header_footer_block(item):
+                    self._add_text_block(item, page.width)
             elif item_type == 'image':
                 self._add_image(item, page.width)
             elif item_type == 'table':
@@ -430,6 +434,15 @@ class DOCXGenerator:
             
             prev_y = y_pos
     
+    def _skip_header_footer_block(self, block: TextBlock) -> bool:
+        """Skip header/footer blocks that are only page numbers (e.g. '343', '344')."""
+        if not block.is_header and not block.is_footer:
+            return False
+        text = block.text.strip()
+        if not text or len(text) > 10:
+            return False
+        return text.isdigit()
+
     def _add_vertical_space(self, points: float):
         """Add vertical space between elements."""
         if points < 2:

@@ -37,20 +37,27 @@ def convert_pdf_to_docx(pdf_path: str, docx_path: str = None) -> bool:
         print(f"Pages:      {page_count}")
         print("\nProcessing...")
 
-        # Convert with optimized settings for better layout handling
+        # Convert with settings tuned for multi-column academic/guideline PDFs.
+        # See pdf2docx Converter.default_settings for all parameters.
         cv.convert(
             docx_path,
-            # Process all pages
             start=0,
             end=None,
-            # Keep tables and preserve structure
             kwargs={
-                'connected_border': False,  # Don't connect table borders
-                'line_overlap_threshold': 0.9,  # Higher = stricter line detection
-                'line_break_width_ratio': 0.5,  # Column break detection
-                'line_break_free_space_ratio': 0.1,  # Space between columns
-                'line_separate_threshold': 5.0,  # Separate lines threshold
-                'new_paragraph_threshold': 0.5,  # New paragraph detection
+                # Table borders: don't merge disconnected lines into tables
+                'connected_border_tolerance': 0.5,
+                'min_border_clearance': 2.0,
+                'max_border_width': 6.0,
+                # Column / line break: detect gutter and column boundaries
+                'line_break_width_ratio': 0.45,       # break if line width < 45% of layout (narrow = new column)
+                'line_break_free_space_ratio': 0.15, # break when gutter (free space) is large
+                'line_separate_threshold': 8.0,       # separate lines if x-gap > 8pt (column gap)
+                'new_paragraph_free_space_ratio': 0.8,
+                # Line grouping: avoid merging lines from different columns
+                'line_overlap_threshold': 0.85,
+                'max_line_spacing_ratio': 1.5,
+                # Clean end-of-line hyphens for reflow
+                'delete_end_line_hyphen': True,
             }
         )
         cv.close()
