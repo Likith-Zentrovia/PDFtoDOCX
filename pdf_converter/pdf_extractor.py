@@ -187,14 +187,15 @@ class PDFExtractor:
 
     # Thresholds for layout detection
     LINE_SPACING_THRESHOLD = 1.2  # Multiple of font size for paragraph break (reduced for better grouping)
-    COLUMN_GAP_THRESHOLD = 20  # Minimum gap to consider as column separator (reduced for sensitivity)
-    HEADER_REGION_PCT = 0.06  # Top 6% of page
-    FOOTER_REGION_PCT = 0.06  # Bottom 6% of page
+    COLUMN_GAP_THRESHOLD = 15  # Minimum gap to consider as column separator
+    HEADER_REGION_PCT = 0.08  # Top 8% of page (for filtering in column detection)
+    FOOTER_REGION_PCT = 0.08  # Bottom 8% of page (for filtering in column detection)
 
     # Column detection parameters
-    COLUMN_DETECTION_BINS = 50  # More bins for finer column detection
-    MIN_GUTTER_WIDTH = 15  # Minimum width for a gutter between columns
+    COLUMN_DETECTION_BINS = 100  # Fine-grained bins for accurate gutter detection
+    MIN_GUTTER_WIDTH = 12  # Minimum width for a gutter between columns
     COLUMN_CONTENT_THRESHOLD = 3  # Minimum lines to consider a region as content
+    MIN_COLUMN_WIDTH_RATIO = 0.20  # Minimum column width as ratio of page width
     
     def __init__(self):
         self.doc: Optional[fitz.Document] = None
@@ -237,7 +238,7 @@ class PDFExtractor:
                       if not self._is_inside_any_bbox(line.bbox, table_bboxes)]
         
         # Step 4: Detect columns from text positions
-        column_info = self._detect_columns(text_lines, width)
+        column_info = self._detect_columns(text_lines, width, height)
         
         # Step 5: Assign columns to text lines
         text_lines = self._assign_columns_to_lines(text_lines, column_info)
@@ -397,16 +398,16 @@ class PDFExtractor:
                 return True
         return False
     
-    def _detect_columns(self, lines: List[TextLine], page_width: float) -> ColumnInfo:
+    def _detect_columns(self, lines: List[TextLine], page_width: float, page_height: float = 792) -> ColumnInfo:
         """
         Detect column structure from text line positions.
 
         This is the KEY function for accurate layout detection.
         Uses a multi-pass algorithm:
-        1. Analyze horizontal text distribution with fine-grained bins
-        2. Identify potential gutters (gaps in text)
-        3. Validate gutters by checking for actual text gaps
-        4. Merge nearby gutters and create column boundaries
+        1. Filter out header/footer region lines (they often have different positions)
+        2. Analyze horizontal text distribution with fine-grained bins
+        3. Find gaps in the text coverage in the middle region of the page
+        4. Validate gutters by checking for actual text gaps
         """
         if not lines:
             return ColumnInfo(
@@ -415,136 +416,154 @@ class PDFExtractor:
                 gutter_positions=[]
             )
 
-        # Collect all X positions (left and right edges of text)
-        x_left_positions = [line.bbox[0] for line in lines]
-        x_right_positions = [line.bbox[2] for line in lines]
+        # Pass 1: Filter out header/footer regions for column detection
+        # These regions often have different text positions that can confuse column detection
+        header_threshold = page_height * self.HEADER_REGION_PCT
+        footer_threshold = page_height * (1 - self.FOOTER_REGION_PCT)
 
-        # Calculate margins and content area
-        margin_left = min(x_left_positions) if x_left_positions else 50
-        margin_right = page_width - max(x_right_positions) if x_right_positions else 50
+        content_lines = [line for line in lines
+                         if line.bbox[1] > header_threshold and line.bbox[3] < footer_threshold]
 
-        content_left = margin_left
-        content_right = page_width - margin_right
-        content_width = content_right - content_left
+        # If we filtered out too many lines, use all lines
+        if len(content_lines) < len(lines) * 0.3:
+            content_lines = lines
 
-        if content_width <= 0:
+        if not content_lines:
             return ColumnInfo(
                 num_columns=1,
                 boundaries=[(0, page_width)],
                 gutter_positions=[]
             )
 
-        # Pass 1: Fine-grained bin analysis
-        num_bins = self.COLUMN_DETECTION_BINS
-        bin_width = page_width / num_bins
-        bin_counts = [0] * num_bins
-        bin_coverage = [set() for _ in range(num_bins)]  # Track which Y-positions have text
+        # Calculate content area bounds
+        x_lefts = [line.bbox[0] for line in content_lines]
+        x_rights = [line.bbox[2] for line in content_lines]
 
-        for line in lines:
-            # Mark all bins that this line spans
-            start_bin = max(0, int(line.bbox[0] / bin_width))
-            end_bin = min(num_bins - 1, int(line.bbox[2] / bin_width))
-            y_pos = int(line.bbox[1])
+        content_left = min(x_lefts)
+        content_right = max(x_rights)
+        content_width = content_right - content_left
 
-            for bin_idx in range(start_bin, end_bin + 1):
-                bin_counts[bin_idx] += 1
-                bin_coverage[bin_idx].add(y_pos)
-
-        # Pass 2: Identify potential gutters
-        # A gutter is a sequence of bins with no or very low text coverage
-        potential_gutters = []
-        min_content_threshold = max(3, len(lines) * 0.02)  # At least 2% of lines
-
-        i = 0
-        while i < num_bins:
-            # Check if this is a low-density region
-            if bin_counts[i] <= 1:
-                # Find the extent of this low-density region
-                gutter_start = i
-                while i < num_bins and bin_counts[i] <= 1:
-                    i += 1
-                gutter_end = i
-
-                gutter_width = (gutter_end - gutter_start) * bin_width
-
-                # Check if there's content on both sides
-                left_content = sum(bin_counts[max(0, gutter_start - 5):gutter_start])
-                right_content = sum(bin_counts[gutter_end:min(num_bins, gutter_end + 5)])
-
-                if (left_content >= min_content_threshold and
-                    right_content >= min_content_threshold and
-                    gutter_width >= self.MIN_GUTTER_WIDTH):
-
-                    gutter_center = (gutter_start + gutter_end) / 2 * bin_width
-                    potential_gutters.append({
-                        'center': gutter_center,
-                        'start': gutter_start * bin_width,
-                        'end': gutter_end * bin_width,
-                        'width': gutter_width,
-                        'left_content': left_content,
-                        'right_content': right_content
-                    })
-            else:
-                i += 1
-
-        # Pass 3: Validate gutters by checking actual text coverage
-        validated_gutters = []
-        for gutter in potential_gutters:
-            gutter_center = gutter['center']
-
-            # Check if any text line actually crosses this gutter
-            crosses_gutter = False
-            for line in lines:
-                # Allow some tolerance at the edges
-                line_left = line.bbox[0] + 5
-                line_right = line.bbox[2] - 5
-                if line_left < gutter_center < line_right:
-                    crosses_gutter = True
-                    break
-
-            if not crosses_gutter:
-                validated_gutters.append(gutter_center)
-
-        # Pass 4: Merge nearby gutters
-        merged_gutters = []
-        for g in sorted(validated_gutters):
-            if not merged_gutters or g - merged_gutters[-1] > self.COLUMN_GAP_THRESHOLD:
-                merged_gutters.append(g)
-            else:
-                # Average the nearby gutters
-                merged_gutters[-1] = (merged_gutters[-1] + g) / 2
-
-        # Determine number of columns
-        if not merged_gutters:
+        if content_width <= page_width * 0.3:
             return ColumnInfo(
                 num_columns=1,
                 boundaries=[(content_left, content_right)],
                 gutter_positions=[]
             )
 
+        # Pass 2: Find potential gutters using gap analysis
+        # Look for vertical gaps in the middle of the page where no text exists
+        page_mid = page_width / 2
+        search_start = page_mid - page_width * 0.25  # Search from 25% to 75% of page
+        search_end = page_mid + page_width * 0.25
+
+        # For each line, record its right edge (for left column) and left edge (for right column)
+        left_column_rights = []  # Right edges of lines that are likely in left column
+        right_column_lefts = []  # Left edges of lines that are likely in right column
+
+        for line in content_lines:
+            line_center = (line.bbox[0] + line.bbox[2]) / 2
+            line_width = line.bbox[2] - line.bbox[0]
+
+            # Skip very short lines (they might be page numbers, bullets, etc.)
+            if line_width < content_width * 0.1:
+                continue
+
+            # If line is clearly in the left half of the page
+            if line.bbox[2] < page_mid + 20:
+                left_column_rights.append(line.bbox[2])
+            # If line is clearly in the right half of the page
+            elif line.bbox[0] > page_mid - 20:
+                right_column_lefts.append(line.bbox[0])
+            # Line spans the middle - likely single column or wide element
+            # Don't count these for gutter detection
+
+        # Pass 3: Calculate the gutter position
+        gutter_position = None
+
+        if left_column_rights and right_column_lefts:
+            # We have lines on both sides of the midpoint
+            max_right_of_left = max(left_column_rights)
+            min_left_of_right = min(right_column_lefts)
+
+            gap = min_left_of_right - max_right_of_left
+
+            if gap >= self.MIN_GUTTER_WIDTH:
+                # We found a clear gutter
+                gutter_position = (max_right_of_left + min_left_of_right) / 2
+
+        # Pass 4: Validate using bin analysis
+        if gutter_position is None:
+            # Try bin-based detection as fallback
+            num_bins = self.COLUMN_DETECTION_BINS
+            bin_width = page_width / num_bins
+            bin_counts = [0] * num_bins
+
+            for line in content_lines:
+                start_bin = max(0, int(line.bbox[0] / bin_width))
+                end_bin = min(num_bins - 1, int(line.bbox[2] / bin_width))
+                for bin_idx in range(start_bin, end_bin + 1):
+                    bin_counts[bin_idx] += 1
+
+            # Look for consecutive empty bins in the middle region
+            mid_bin_start = int(search_start / bin_width)
+            mid_bin_end = int(search_end / bin_width)
+
+            best_gutter = None
+            best_gutter_width = 0
+
+            i = mid_bin_start
+            while i < mid_bin_end:
+                if bin_counts[i] == 0:
+                    gutter_start = i
+                    while i < mid_bin_end and bin_counts[i] == 0:
+                        i += 1
+                    gutter_end = i
+
+                    gutter_width = (gutter_end - gutter_start) * bin_width
+
+                    if gutter_width > best_gutter_width and gutter_width >= self.MIN_GUTTER_WIDTH:
+                        best_gutter = (gutter_start + gutter_end) / 2 * bin_width
+                        best_gutter_width = gutter_width
+                else:
+                    i += 1
+
+            if best_gutter is not None:
+                gutter_position = best_gutter
+
+        # Pass 5: Final validation - make sure gutter doesn't split any lines
+        if gutter_position is not None:
+            # Check if any line crosses the gutter
+            lines_crossing = 0
+            for line in content_lines:
+                # Use some margin to avoid edge cases
+                line_left = line.bbox[0] + 5
+                line_right = line.bbox[2] - 5
+                if line_left < gutter_position < line_right:
+                    lines_crossing += 1
+
+            # If too many lines cross the gutter, it's probably not a valid gutter
+            if lines_crossing > len(content_lines) * 0.1:  # More than 10% cross
+                gutter_position = None
+
         # Create column boundaries
-        num_columns = len(merged_gutters) + 1
-        boundaries = []
+        if gutter_position is None:
+            return ColumnInfo(
+                num_columns=1,
+                boundaries=[(content_left, content_right)],
+                gutter_positions=[]
+            )
 
-        prev_x = content_left
-        for gutter in merged_gutters:
-            boundaries.append((prev_x, gutter))
-            prev_x = gutter
-        boundaries.append((prev_x, content_right))
+        # Create two-column layout
+        left_boundary = (content_left, gutter_position)
+        right_boundary = (gutter_position, content_right)
 
-        # Validate columns have reasonable widths
-        min_col_width = content_width * 0.15  # Minimum 15% of content width
-        valid_boundaries = []
-        valid_gutters = []
+        # Validate column widths
+        min_col_width = page_width * self.MIN_COLUMN_WIDTH_RATIO
 
-        for i, (start, end) in enumerate(boundaries):
-            col_width = end - start
-            if col_width >= min_col_width:
-                valid_boundaries.append((start, end))
-                if i < len(merged_gutters):
-                    valid_gutters.append(merged_gutters[i])
+        left_width = left_boundary[1] - left_boundary[0]
+        right_width = right_boundary[1] - right_boundary[0]
 
-        if len(valid_boundaries) <= 1:
+        if left_width < min_col_width or right_width < min_col_width:
             return ColumnInfo(
                 num_columns=1,
                 boundaries=[(content_left, content_right)],
@@ -552,9 +571,9 @@ class PDFExtractor:
             )
 
         return ColumnInfo(
-            num_columns=len(valid_boundaries),
-            boundaries=valid_boundaries,
-            gutter_positions=valid_gutters
+            num_columns=2,
+            boundaries=[left_boundary, right_boundary],
+            gutter_positions=[gutter_position]
         )
     
     def _assign_columns_to_lines(self, lines: List[TextLine], column_info: ColumnInfo) -> List[TextLine]:
@@ -622,15 +641,13 @@ class PDFExtractor:
             if line_column != current_column:
                 start_new_block = True
 
+            # Calculate vertical gap (used in multiple checks)
+            vertical_gap = line.bbox[1] - prev_line.bbox[3]
+            avg_font_size = (prev_line.font_size + line.font_size) / 2
+
             if not start_new_block:
-                # Calculate vertical gap
-                vertical_gap = line.bbox[1] - prev_line.bbox[3]
-
-                # Use average font size for threshold calculation
-                avg_font_size = (prev_line.font_size + line.font_size) / 2
+                # Large vertical gap = new block (use tighter threshold)
                 line_height_threshold = avg_font_size * self.LINE_SPACING_THRESHOLD
-
-                # Large vertical gap = new block
                 if vertical_gap > line_height_threshold:
                     start_new_block = True
 
@@ -638,28 +655,53 @@ class PDFExtractor:
                 # Check for significant font size change (indicates new section)
                 font_size_ratio = line.font_size / prev_line.font_size if prev_line.font_size > 0 else 1
                 if font_size_ratio > 1.3 or font_size_ratio < 0.7:
-                    # Significant font size change - check if this is a heading
-                    if line.font_size > prev_line.font_size:
-                        start_new_block = True
+                    start_new_block = True
+
+            if not start_new_block:
+                # Check for italic/bold transition (often indicates section boundary)
+                # If previous line was italic but current is not (going from italic to regular)
+                if prev_line.is_italic and not line.is_italic:
+                    # Italic to regular change = new block (common for [Recommendation] -> paragraph)
+                    start_new_block = True
+                # Also check if previous was bold+italic (like [Recommendation]) and current is regular
+                elif prev_line.is_bold and prev_line.is_italic and (not line.is_bold or not line.is_italic):
+                    start_new_block = True
 
             if not start_new_block:
                 # Check X position alignment
                 x_diff = abs(line.bbox[0] - prev_line.bbox[0])
-                prev_line_width = prev_line.bbox[2] - prev_line.bbox[0]
 
                 # Get column width for context
                 col_width = column_info.boundaries[line_column - 1][1] - column_info.boundaries[line_column - 1][0] if column_info.num_columns > 1 and line_column <= len(column_info.boundaries) else 500
 
-                # Check if this is an indented line (paragraph start) or aligned
-                is_indented = x_diff > 20 and x_diff < col_width * 0.15  # Small indent = paragraph start
-                is_significantly_different = x_diff > col_width * 0.2  # Large X difference
+                # Check if line starts significantly to the left of previous line
+                # This often indicates returning to normal paragraph from indented bullet
+                moved_left = line.bbox[0] < prev_line.bbox[0] - 5
 
-                if is_significantly_different and vertical_gap > avg_font_size * 0.3:
-                    # Large X difference with some vertical gap = likely new block
+                # Check if this is significantly indented or de-indented
+                is_indented = x_diff > 15 and x_diff < col_width * 0.15
+                is_significantly_different = x_diff > col_width * 0.15
+
+                if is_significantly_different and vertical_gap > avg_font_size * 0.2:
+                    # Significant X change = likely new block
                     start_new_block = True
-                elif is_indented and vertical_gap > avg_font_size * 0.5:
+                elif moved_left and vertical_gap > avg_font_size * 0.3:
+                    # Line moves left (e.g., from indented bullet to paragraph)
+                    start_new_block = True
+                elif is_indented and vertical_gap > avg_font_size * 0.4:
                     # Indented with vertical gap = new paragraph
                     start_new_block = True
+
+            if not start_new_block:
+                # Check for special patterns that indicate section breaks
+                line_text = line.text.strip()
+                if line_text:
+                    # Section number patterns (e.g., "1.2.1", "2.3")
+                    if re.match(r'^\d+\.\d+', line_text):
+                        start_new_block = True
+                    # [Recommendation] pattern
+                    elif line_text.startswith('[') and ']' in line_text:
+                        start_new_block = True
 
             if not start_new_block:
                 # Check for list item patterns
@@ -667,7 +709,7 @@ class PDFExtractor:
                 if line_text:
                     # Bullet points and numbered lists
                     first_char = line_text[0]
-                    if first_char in '•●○■□▪▫-–—*+>':
+                    if first_char in '•●○■□▪▫–—':
                         start_new_block = True
                     elif len(line_text) > 2:
                         # Check for numbered list patterns
