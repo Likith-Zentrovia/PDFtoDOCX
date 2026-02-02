@@ -32,17 +32,27 @@ pip install -r requirements.txt
 
 ## Usage
 
-```bash
-# Basic conversion (NO API KEY NEEDED)
-python convert.py document.pdf
+**Two conversion paths** (use the one that gives better results for your PDF):
 
-# Specify output
+| Script | Engine | Best for |
+|--------|--------|----------|
+| `convert.py` | pdf2docx | Most PDFs; multi-column tuned |
+| `convert_best.py` | pdf2docx + optional pdf_converter | Compare both outputs |
+| `test_installation.py <pdf>` | pdf_converter (PyMuPDF) | When pdf2docx misorders columns |
+
+```bash
+# Recommended: pdf2docx with multi-column-optimized settings
+python convert.py document.pdf
 python convert.py document.pdf -o output.docx
 
-# Optional: With API key for layout hints (1 API call max)
-export ANTHROPIC_API_KEY='your-key'
-python convert.py document.pdf
+# Compare both engines (writes document.docx and document_pdf_converter.docx)
+python convert_best.py document.pdf --both
+
+# Alternative: PyMuPDF-based converter (no pdf2docx)
+python test_installation.py document.pdf
 ```
+
+**For complex multi-column PDFs** (e.g. guidelines, journals): run `convert_best.py document.pdf --both` and keep the DOCX that has correct column order and no mixed-up paragraphs.
 
 ## With vs Without API Key
 
@@ -56,6 +66,14 @@ python convert.py document.pdf
 | Cost | Free | ~$0.002 |
 
 **The API key is completely optional.** It only provides hints for complex layouts.
+
+## Conversion quality (multi-column PDFs)
+
+If the DOCX has **wrong reading order** (e.g. left/right column text mixed, or header fragments in the middle):
+
+1. **Use the fixed `convert.py`** – it now passes correct pdf2docx kwargs (`line_break_width_ratio`, `line_break_free_space_ratio`, `connected_border_tolerance`, etc.) so column boundaries are detected properly.
+2. **Try both engines** – run `python convert_best.py your.pdf --both` and compare `your.docx` (pdf2docx) with `your_pdf_converter.docx` (PyMuPDF). Keep the one that looks correct.
+3. **pdf_converter** skips standalone page-number headers/footers (e.g. "343", "344") so they don’t appear as extra paragraphs.
 
 ## Example Output
 
