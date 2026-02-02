@@ -8,9 +8,11 @@ Key features:
 - Images at correct positions
 - Multi-column support using Word sections or tables
 - Formatting preservation (fonts, sizes, colors)
+- Accurate spacing and layout preservation
 """
 
 import io
+import re
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
@@ -43,17 +45,28 @@ class GenerationResult:
 class DOCXGenerator:
     """
     Generates DOCX from extracted PDF content.
-    
+
     Creates accurate layout by:
     1. Processing elements in exact reading order
     2. Handling multi-column layouts with tables
     3. Placing images inline at correct positions
     4. Rendering tables with proper structure
+    5. Preserving accurate spacing and line heights
     """
-    
+
     # Font size limits
     MIN_FONT_SIZE = 6
     MAX_FONT_SIZE = 48
+
+    # Spacing constants (in points)
+    DEFAULT_LINE_SPACING_MULTIPLIER = 1.15  # Slightly more than single
+    MIN_PARAGRAPH_SPACING = 0
+    DEFAULT_PARAGRAPH_SPACING = 6
+    MAX_PARAGRAPH_SPACING = 24
+
+    # Layout constants
+    CONTENT_WIDTH_INCHES = 7.0  # Total content width
+    COLUMN_GAP_INCHES = 0.25  # Gap between columns
     
     def __init__(self):
         self.doc: Optional[Document] = None
@@ -155,22 +168,56 @@ class DOCXGenerator:
     def _generate_singlecolumn_page(self, page: PageContent):
         """Generate single-column page content."""
         prev_y = 0
-        
+        prev_elem_type = None
+        prev_font_size = 11.0
+
         for elem in page.elements:
-            # Add spacing based on vertical gap
+            # Calculate spacing based on vertical gap and element types
+            spacing_pts = 0
             if prev_y > 0:
                 gap = elem.y_position - prev_y
-                if gap > 15:
-                    self._add_vertical_space(min(gap / 3, 18))
-            
+                # Get current element's font size for context
+                curr_font_size = 11.0
+                if elem.element_type == ElementType.TEXT:
+                    curr_font_size = elem.element.primary_font_size
+
+                # Calculate appropriate spacing based on gap size
+                if gap > 0:
+                    # Use font size as reference for spacing decisions
+                    avg_font_size = (prev_font_size + curr_font_size) / 2
+
+                    if gap < avg_font_size * 0.5:
+                        # Very small gap - no extra spacing (same paragraph continuation)
+                        spacing_pts = 0
+                    elif gap < avg_font_size * 1.5:
+                        # Normal line spacing within paragraph
+                        spacing_pts = min(gap * 0.3, 6)
+                    elif gap < avg_font_size * 3:
+                        # Paragraph break
+                        spacing_pts = min(gap * 0.5, 12)
+                    else:
+                        # Large gap - section break
+                        spacing_pts = min(gap * 0.4, self.MAX_PARAGRAPH_SPACING)
+
+                    # Add extra spacing for transitions between element types
+                    if prev_elem_type != elem.element_type:
+                        spacing_pts = max(spacing_pts, 6)
+
+                if spacing_pts > 2:
+                    self._add_vertical_space(spacing_pts)
+
             if elem.element_type == ElementType.TEXT:
                 self._add_text_block(elem.element, page.width)
+                prev_font_size = elem.element.primary_font_size
             elif elem.element_type == ElementType.IMAGE:
                 self._add_image(elem.element, page.width)
+                prev_font_size = 11.0
             elif elem.element_type == ElementType.TABLE:
                 self._add_table(elem.element, page.width)
-            
+                prev_font_size = 10.0
+
             prev_y = elem.bbox[3]  # Bottom of element
+            prev_elem_type = elem.element_type
     
     def _generate_multicolumn_page(self, page: PageContent):
         """
@@ -228,61 +275,127 @@ class DOCXGenerator:
         """Render a chunk of multi-column content using a table."""
         if not columns:
             return
-        
+
         num_cols = page.column_info.num_columns
-        
+
         # Create a table with the appropriate number of columns
         table = self.doc.add_table(rows=1, cols=num_cols)
         table.autofit = False
-        
-        # Set column widths
-        total_width = 7.0  # Total content width in inches
+
+        # Calculate column widths based on actual column boundaries
+        total_content_width = self.CONTENT_WIDTH_INCHES
         col_widths = []
+        total_boundary_width = sum(x_end - x_start for x_start, x_end in page.column_info.boundaries)
+
         for x_start, x_end in page.column_info.boundaries:
-            width_pct = (x_end - x_start) / page.width
-            col_widths.append(width_pct * total_width)
-        
+            if total_boundary_width > 0:
+                width_pct = (x_end - x_start) / total_boundary_width
+            else:
+                width_pct = 1.0 / num_cols
+            # Subtract small amount for column gap
+            col_width = width_pct * total_content_width - (self.COLUMN_GAP_INCHES / num_cols)
+            col_widths.append(max(col_width, 1.0))  # Minimum 1 inch
+
         # Fill in the columns
         for col_idx in range(num_cols):
             cell = table.rows[0].cells[col_idx]
-            
+
             if col_idx < len(col_widths):
                 cell.width = Inches(col_widths[col_idx])
-            
-            # Set cell properties for clean layout
-            self._setup_cell(cell)
-            
+
+            # Set cell properties for clean layout with proper padding
+            self._setup_cell(cell, add_padding=True)
+
             # Add content to this column
             col_num = col_idx + 1
             if col_num in columns:
+                prev_y = 0
                 for elem in columns[col_num]:
+                    # Add spacing between elements
+                    if prev_y > 0:
+                        gap = elem.y_position - prev_y
+                        if gap > 10:
+                            # Add spacing paragraph
+                            spacing_pts = min(gap * 0.3, 12)
+                            if spacing_pts > 2:
+                                p = cell.add_paragraph()
+                                p.paragraph_format.space_after = Pt(spacing_pts)
+                                p.paragraph_format.space_before = Pt(0)
+
                     if elem.element_type == ElementType.TEXT:
-                        self._add_text_block_to_cell(cell, elem.element)
+                        self._add_text_block_to_cell(cell, elem.element, page.width)
                     elif elem.element_type == ElementType.IMAGE:
-                        self._add_image_to_cell(cell, elem.element, page.width / num_cols)
-        
+                        self._add_image_to_cell(cell, elem.element, col_widths[col_idx] * 72)  # Convert to points
+
+                    prev_y = elem.bbox[3]
+
         # Remove table borders for seamless column layout
         self._remove_table_borders(table)
+
+        # Set table width
+        self._set_table_width(table, total_content_width)
     
-    def _setup_cell(self, cell):
+    def _setup_cell(self, cell, add_padding: bool = False):
         """Setup cell properties for clean layout."""
-        # Remove cell margins/padding
         tc = cell._tc
         tcPr = tc.get_or_add_tcPr()
-        
-        # Set cell margins to minimum
+
+        # Remove existing margins if present
+        existing_mar = tcPr.find(qn('w:tcMar'))
+        if existing_mar is not None:
+            tcPr.remove(existing_mar)
+
+        # Set cell margins
         tcMar = OxmlElement('w:tcMar')
-        for margin_name in ['top', 'left', 'bottom', 'right']:
+        if add_padding:
+            # Add small padding for better readability in multi-column
+            margins = {
+                'top': '57',      # ~1pt
+                'left': '115',    # ~2pt
+                'bottom': '57',   # ~1pt
+                'right': '172'    # ~3pt (gutter side)
+            }
+        else:
+            margins = {
+                'top': '0',
+                'left': '0',
+                'bottom': '0',
+                'right': '0'
+            }
+
+        for margin_name, value in margins.items():
             margin = OxmlElement(f'w:{margin_name}')
-            margin.set(qn('w:w'), '0')
+            margin.set(qn('w:w'), value)
             margin.set(qn('w:type'), 'dxa')
             tcMar.append(margin)
         tcPr.append(tcMar)
-        
-        # Vertical alignment
+
+        # Vertical alignment - top
+        existing_valign = tcPr.find(qn('w:vAlign'))
+        if existing_valign is not None:
+            tcPr.remove(existing_valign)
         vAlign = OxmlElement('w:vAlign')
         vAlign.set(qn('w:val'), 'top')
         tcPr.append(vAlign)
+
+    def _set_table_width(self, table, width_inches: float):
+        """Set the total width of a table."""
+        tbl = table._tbl
+        tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
+
+        # Remove existing width
+        existing_width = tblPr.find(qn('w:tblW'))
+        if existing_width is not None:
+            tblPr.remove(existing_width)
+
+        # Set new width
+        tblW = OxmlElement('w:tblW')
+        tblW.set(qn('w:w'), str(int(width_inches * 1440)))  # Convert to twips
+        tblW.set(qn('w:type'), 'dxa')
+        tblPr.insert(0, tblW)
+
+        if tbl.tblPr is None:
+            tbl.insert(0, tblPr)
     
     def _generate_page_fallback(self, page: PageContent):
         """Fallback page generation using text_blocks, images, tables directly."""
@@ -319,163 +432,523 @@ class DOCXGenerator:
     
     def _add_vertical_space(self, points: float):
         """Add vertical space between elements."""
-        if points < 3:
+        if points < 2:
             return
+        # Clamp spacing to reasonable limits
+        points = min(max(points, 2), self.MAX_PARAGRAPH_SPACING)
         para = self.doc.add_paragraph()
         para.paragraph_format.space_before = Pt(0)
         para.paragraph_format.space_after = Pt(points)
         pf = para.paragraph_format
         pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        # Make the spacer paragraph minimal height
+        run = para.add_run()
+        run.font.size = Pt(1)
     
     def _add_text_block(self, block: TextBlock, page_width: float):
         """Add a text block as paragraph(s)."""
         # Create paragraph
         para = self.doc.add_paragraph()
-        
+
+        # Determine if this block should flow as continuous text or preserve line breaks
+        should_flow = self._should_flow_text(block)
+
         # Add text with formatting
-        for line in block.lines:
-            if line != block.lines[0]:
-                # Add line break between lines (not new paragraph)
-                para.add_run('\n')
-            
-            run = para.add_run(line.text)
-            
+        for i, line in enumerate(block.lines):
+            if i > 0:
+                if should_flow:
+                    # Check if previous line ends with hyphen (word continuation)
+                    prev_text = block.lines[i - 1].text.rstrip()
+                    if prev_text.endswith('-'):
+                        # Don't add space, the hyphen indicates word continuation
+                        pass
+                    else:
+                        # Add space between lines for flowing text
+                        para.add_run(' ')
+                else:
+                    # Add soft line break for non-flowing text (preserves layout)
+                    para.add_run('\n')
+
+            # Handle line text - strip trailing whitespace but preserve leading
+            line_text = line.text.rstrip()
+
+            # If flowing text and line ends with hyphen, remove the hyphen
+            if should_flow and line_text.endswith('-') and i < len(block.lines) - 1:
+                line_text = line_text[:-1]
+
+            run = para.add_run(line_text)
+
             # Apply formatting
             self._apply_run_formatting(run, line)
-        
+
         # Paragraph formatting
-        self._apply_paragraph_formatting(para, block)
-        
+        self._apply_paragraph_formatting(para, block, page_width)
+
         self._text_count += 1
+
+    def _should_flow_text(self, block: TextBlock) -> bool:
+        """Determine if text in block should flow (reflow) or preserve line breaks."""
+        if not block.lines or len(block.lines) < 2:
+            return False
+
+        # Check if this looks like a paragraph (continuous prose) vs formatted text
+        # Indicators of flowing text:
+        # 1. Lines are roughly similar width (not ragged like a list)
+        # 2. No special formatting patterns (bullets, numbers)
+        # 3. Lines end with words (not punctuation that indicates line end)
+
+        line_widths = [line.bbox[2] - line.bbox[0] for line in block.lines]
+        if not line_widths:
+            return False
+
+        max_width = max(line_widths)
+        if max_width == 0:
+            return False
+
+        # Calculate how many lines are "full width" (more than 85% of max)
+        full_width_lines = sum(1 for w in line_widths[:-1] if w > max_width * 0.85)
+
+        # If most lines are full width, it's likely flowing prose
+        if len(block.lines) > 2 and full_width_lines >= (len(block.lines) - 1) * 0.6:
+            # Additional check: first character patterns
+            first_line_text = block.lines[0].text.strip()
+            # Don't flow if it starts with bullet-like patterns
+            if first_line_text and first_line_text[0] in '•●○■□▪▫-–—*+>':
+                return False
+            # Don't flow if it starts with numbers followed by punctuation (list)
+            if re.match(r'^\d+[\.\)]\s', first_line_text):
+                return False
+            return True
+
+        return False
     
-    def _add_text_block_to_cell(self, cell, block: TextBlock):
+    def _add_text_block_to_cell(self, cell, block: TextBlock, page_width: float = 612):
         """Add a text block to a table cell."""
         para = cell.add_paragraph()
-        
-        for line in block.lines:
-            if line != block.lines[0]:
-                para.add_run('\n')
-            
-            run = para.add_run(line.text)
+
+        # Determine if this block should flow as continuous text
+        should_flow = self._should_flow_text(block)
+
+        for i, line in enumerate(block.lines):
+            if i > 0:
+                if should_flow:
+                    prev_text = block.lines[i - 1].text.rstrip()
+                    if not prev_text.endswith('-'):
+                        para.add_run(' ')
+                else:
+                    para.add_run('\n')
+
+            line_text = line.text.rstrip()
+            if should_flow and line_text.endswith('-') and i < len(block.lines) - 1:
+                line_text = line_text[:-1]
+
+            run = para.add_run(line_text)
             self._apply_run_formatting(run, line)
-        
-        self._apply_paragraph_formatting(para, block)
+
+        self._apply_paragraph_formatting(para, block, page_width)
         self._text_count += 1
     
     def _apply_run_formatting(self, run, line):
         """Apply formatting to a run based on TextLine properties."""
-        # Font size
+        # Font size - round to nearest 0.5 for cleaner output
         size = max(self.MIN_FONT_SIZE, min(self.MAX_FONT_SIZE, line.font_size))
+        size = round(size * 2) / 2  # Round to nearest 0.5
         run.font.size = Pt(size)
-        
+
         # Bold/Italic
         run.font.bold = line.is_bold
         run.font.italic = line.is_italic
-        
-        # Color (skip black)
-        if line.color != (0, 0, 0):
-            run.font.color.rgb = RGBColor(*line.color)
-        
-        # Font name
+
+        # Color - apply all colors including black for consistency
+        if line.color:
+            r, g, b = line.color
+            # Only skip if it's exactly black (0, 0, 0) and we want Word default
+            if r != 0 or g != 0 or b != 0:
+                run.font.color.rgb = RGBColor(r, g, b)
+
+        # Font name - always set for consistency
         font_name = self._clean_font_name(line.font_name)
-        if font_name:
-            run.font.name = font_name
+        run.font.name = font_name
+
+        # Set East Asian and Complex Script fonts too for full Unicode support
+        rPr = run._r.get_or_add_rPr()
+
+        # Set fonts for different scripts
+        fonts = OxmlElement('w:rFonts')
+        fonts.set(qn('w:ascii'), font_name)
+        fonts.set(qn('w:hAnsi'), font_name)
+        fonts.set(qn('w:eastAsia'), font_name)
+        fonts.set(qn('w:cs'), font_name)
+
+        # Remove existing rFonts if present
+        existing_fonts = rPr.find(qn('w:rFonts'))
+        if existing_fonts is not None:
+            rPr.remove(existing_fonts)
+        rPr.insert(0, fonts)
     
-    def _apply_paragraph_formatting(self, para, block: TextBlock):
+    def _apply_paragraph_formatting(self, para, block: TextBlock, page_width: float = 612):
         """Apply paragraph-level formatting."""
         pf = para.paragraph_format
-        
-        # Minimal spacing
+
+        # Calculate spacing based on font size
+        font_size = block.primary_font_size
+        space_after = min(font_size * 0.3, 6)  # Proportional spacing
+
         pf.space_before = Pt(0)
-        pf.space_after = Pt(3)
-        
-        # Line spacing
-        pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
-        
+        pf.space_after = Pt(space_after)
+
+        # Line spacing - use multiple for better readability
+        pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+        pf.line_spacing = self.DEFAULT_LINE_SPACING_MULTIPLIER
+
         # Detect alignment from block position
-        # (Could be enhanced based on X positions)
+        block_center = (block.bbox[0] + block.bbox[2]) / 2
+        page_center = page_width / 2
+
+        # Calculate margins (approximate content area)
+        margin = page_width * 0.08  # ~8% margins on each side
+        content_left = margin
+        content_right = page_width - margin
+        content_center = page_width / 2
+
+        # Determine alignment based on position
+        block_left = block.bbox[0]
+        block_right = block.bbox[2]
+        block_width = block_right - block_left
+
+        # Check if block is centered
+        left_margin_dist = abs(block_left - content_left)
+        right_margin_dist = abs(block_right - content_right)
+
+        if block_width < (content_right - content_left) * 0.6:
+            # Short block - check if centered
+            if abs(left_margin_dist - right_margin_dist) < 20:
+                pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            elif right_margin_dist < left_margin_dist * 0.5:
+                # Block is closer to right margin
+                pf.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            else:
+                pf.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        else:
+            # Wide block - justify if it spans most of the width
+            if block_width > (content_right - content_left) * 0.9:
+                pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            else:
+                pf.alignment = WD_ALIGN_PARAGRAPH.LEFT
     
     def _clean_font_name(self, font_name: str) -> str:
-        """Clean PDF font name for Word."""
+        """Clean PDF font name for Word with comprehensive font mapping."""
         if not font_name:
-            return ""
-        
+            return "Calibri"  # Default to Calibri instead of empty
+
         # Remove subset prefix (e.g., "ABCDEF+")
         if "+" in font_name:
             font_name = font_name.split("+", 1)[-1]
-        
-        # Common mappings
-        mappings = {
-            "ArialMT": "Arial",
-            "Arial-BoldMT": "Arial",
-            "Arial-ItalicMT": "Arial",
-            "Arial-BoldItalicMT": "Arial",
-            "TimesNewRomanPSMT": "Times New Roman",
-            "TimesNewRomanPS-BoldMT": "Times New Roman",
-            "TimesNewRomanPS-ItalicMT": "Times New Roman",
-            "CourierNewPSMT": "Courier New",
-            "Helvetica": "Arial",
-            "Helvetica-Bold": "Arial",
+
+        # Normalize: remove hyphens and make lowercase for matching
+        font_lower = font_name.lower().replace("-", "").replace(" ", "")
+
+        # Comprehensive font family mappings
+        font_families = {
+            # Arial family
+            "arial": "Arial",
+            "arialmt": "Arial",
+            "arialbold": "Arial",
+            "arialitalic": "Arial",
+            "arialbolditalic": "Arial",
+            "arialboldmt": "Arial",
+            "arialitalicmt": "Arial",
+            "arialbolditalicmt": "Arial",
+            "arialnarrow": "Arial Narrow",
+            "arialblack": "Arial Black",
+
+            # Helvetica -> Arial (common substitution)
+            "helvetica": "Arial",
+            "helveticabold": "Arial",
+            "helveticaoblique": "Arial",
+            "helveticaboldoblique": "Arial",
+            "helveticaneue": "Arial",
+            "helveticaneuebold": "Arial",
+            "helveticaneuelight": "Arial",
+
+            # Times family
+            "times": "Times New Roman",
+            "timesnewroman": "Times New Roman",
+            "timesnewromanpsmt": "Times New Roman",
+            "timesnewromanps": "Times New Roman",
+            "timesnewromanbold": "Times New Roman",
+            "timesnewromanitalic": "Times New Roman",
+            "timesnewromanbolditalic": "Times New Roman",
+            "timesroman": "Times New Roman",
+
+            # Courier family
+            "courier": "Courier New",
+            "couriernew": "Courier New",
+            "couriernewpsmt": "Courier New",
+            "couriernewtps": "Courier New",
+
+            # Calibri family (Office default)
+            "calibri": "Calibri",
+            "calibribold": "Calibri",
+            "calibrilight": "Calibri Light",
+
+            # Cambria family
+            "cambria": "Cambria",
+            "cambriabold": "Cambria",
+            "cambriamath": "Cambria Math",
+
+            # Georgia family
+            "georgia": "Georgia",
+            "georgiabold": "Georgia",
+            "georgiaitalic": "Georgia",
+
+            # Verdana family
+            "verdana": "Verdana",
+            "verdanabold": "Verdana",
+            "verdanaitalic": "Verdana",
+
+            # Tahoma family
+            "tahoma": "Tahoma",
+            "tahomabold": "Tahoma",
+
+            # Trebuchet family
+            "trebuchetms": "Trebuchet MS",
+            "trebuchet": "Trebuchet MS",
+
+            # Comic Sans
+            "comicsansms": "Comic Sans MS",
+            "comicsans": "Comic Sans MS",
+
+            # Impact
+            "impact": "Impact",
+
+            # Garamond family
+            "garamond": "Garamond",
+            "garamondbold": "Garamond",
+
+            # Palatino family
+            "palatino": "Palatino Linotype",
+            "palatinolinotype": "Palatino Linotype",
+            "bookantiqua": "Book Antiqua",
+
+            # Century family
+            "centurygothic": "Century Gothic",
+            "centuryschoolbook": "Century Schoolbook",
+
+            # Segoe family (Windows)
+            "segoeui": "Segoe UI",
+            "segoeuibold": "Segoe UI",
+            "segoeuisemibold": "Segoe UI Semibold",
+            "segoeuilight": "Segoe UI Light",
+
+            # Consolas (monospace)
+            "consolas": "Consolas",
+
+            # Symbol fonts
+            "symbol": "Symbol",
+            "wingdings": "Wingdings",
+            "webdings": "Webdings",
+            "zapfdingbats": "Wingdings",
+
+            # Open Sans
+            "opensans": "Arial",
+            "opensansbold": "Arial",
+            "opensanslight": "Arial",
+
+            # Roboto -> Arial
+            "roboto": "Arial",
+            "robotobold": "Arial",
+            "robotolight": "Arial",
+
+            # Source Sans -> Arial
+            "sourcesanspro": "Arial",
+            "sourcesans": "Arial",
+
+            # Lato -> Arial
+            "lato": "Arial",
+            "latobold": "Arial",
+
+            # Montserrat -> Arial
+            "montserrat": "Arial",
+            "montserratbold": "Arial",
         }
-        
-        if font_name in mappings:
-            return mappings[font_name]
-        
-        # Remove style suffixes
-        for suffix in ["-Bold", "-Italic", "-BoldItalic", "MT", "PS"]:
-            if font_name.endswith(suffix):
-                font_name = font_name[:-len(suffix)]
-        
-        return font_name
+
+        # Try exact match first
+        if font_lower in font_families:
+            return font_families[font_lower]
+
+        # Try to match font family by checking if the font name contains known families
+        font_family_prefixes = [
+            ("arial", "Arial"),
+            ("helvetica", "Arial"),
+            ("times", "Times New Roman"),
+            ("courier", "Courier New"),
+            ("calibri", "Calibri"),
+            ("cambria", "Cambria"),
+            ("georgia", "Georgia"),
+            ("verdana", "Verdana"),
+            ("tahoma", "Tahoma"),
+            ("trebuchet", "Trebuchet MS"),
+            ("garamond", "Garamond"),
+            ("palatino", "Palatino Linotype"),
+            ("segoe", "Segoe UI"),
+            ("consolas", "Consolas"),
+            ("roboto", "Arial"),
+            ("opensans", "Arial"),
+            ("lato", "Arial"),
+            ("montserrat", "Arial"),
+        ]
+
+        for prefix, mapped_font in font_family_prefixes:
+            if prefix in font_lower:
+                return mapped_font
+
+        # Remove common suffixes and try again
+        suffixes_to_remove = [
+            "bold", "italic", "oblique", "light", "medium", "semibold",
+            "regular", "book", "condensed", "extended", "narrow",
+            "mt", "ps", "psmt", "std", "pro"
+        ]
+
+        cleaned = font_lower
+        for suffix in suffixes_to_remove:
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[:-len(suffix)]
+
+        if cleaned in font_families:
+            return font_families[cleaned]
+
+        for prefix, mapped_font in font_family_prefixes:
+            if prefix in cleaned:
+                return mapped_font
+
+        # If nothing matches, return Calibri as safe default
+        return "Calibri"
     
     def _add_image(self, img: ImageInfo, page_width: float):
         """Add an image to the document."""
         if not img.data:
             return
-        
+
         try:
-            image_stream = io.BytesIO(img.data)
-            
+            # Try to convert image data to a format python-docx can handle
+            image_data = self._prepare_image_data(img.data, img.ext)
+            if not image_data:
+                self._errors.append("Image: Could not prepare image data")
+                return
+
+            image_stream = io.BytesIO(image_data)
+
             # Calculate size - preserve aspect ratio, fit within page
-            img_width_ratio = img.width / page_width
-            max_width_inches = min(img_width_ratio * 7.5, 7.0)  # Max 7 inches
-            max_width_inches = max(max_width_inches, 1.0)  # Min 1 inch
-            
+            img_width_ratio = img.width / page_width if page_width > 0 else 0.5
+
+            # Scale to fit content width while preserving proportions
+            max_width_inches = min(img_width_ratio * self.CONTENT_WIDTH_INCHES, self.CONTENT_WIDTH_INCHES)
+            max_width_inches = max(max_width_inches, 0.5)  # Min 0.5 inch
+
+            # Ensure aspect ratio is preserved
+            if img.width > 0 and img.height > 0:
+                aspect_ratio = img.height / img.width
+                max_height_inches = max_width_inches * aspect_ratio
+
+                # Limit height to reasonable value (8 inches)
+                if max_height_inches > 8.0:
+                    max_height_inches = 8.0
+                    max_width_inches = max_height_inches / aspect_ratio
+
             # Create paragraph and add image
             para = self.doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
+
             run = para.add_run()
             run.add_picture(image_stream, width=Inches(max_width_inches))
-            
-            # Minimal spacing
-            para.paragraph_format.space_before = Pt(6)
-            para.paragraph_format.space_after = Pt(6)
-            
+
+            # Proportional spacing based on image size
+            spacing = min(max(max_width_inches * 2, 4), 12)
+            para.paragraph_format.space_before = Pt(spacing)
+            para.paragraph_format.space_after = Pt(spacing)
+
             self._image_count += 1
-            
+
         except Exception as e:
             self._errors.append(f"Image error: {e}")
+
+    def _prepare_image_data(self, data: bytes, ext: str) -> Optional[bytes]:
+        """Prepare image data for insertion into DOCX, converting if necessary."""
+        if not data:
+            return None
+
+        try:
+            # Try to use PIL/Pillow to validate and potentially convert the image
+            from PIL import Image
+
+            img_stream = io.BytesIO(data)
+            try:
+                pil_image = Image.open(img_stream)
+                pil_image.load()  # Force load to verify it's valid
+
+                # Convert to RGB if necessary (handles CMYK, etc.)
+                if pil_image.mode in ('CMYK', 'P', 'LA', 'PA'):
+                    pil_image = pil_image.convert('RGB')
+                elif pil_image.mode == 'RGBA':
+                    # Keep RGBA for transparency support
+                    pass
+                elif pil_image.mode != 'RGB':
+                    pil_image = pil_image.convert('RGB')
+
+                # Save to PNG format which is well supported
+                output = io.BytesIO()
+                save_format = 'PNG' if pil_image.mode == 'RGBA' else 'JPEG'
+                pil_image.save(output, format=save_format, quality=95)
+                return output.getvalue()
+
+            except Exception:
+                # PIL couldn't process it, return original data
+                pass
+
+        except ImportError:
+            # PIL not available, try using original data
+            pass
+
+        # Return original data as fallback
+        return data
     
-    def _add_image_to_cell(self, cell, img: ImageInfo, max_width: float):
+    def _add_image_to_cell(self, cell, img: ImageInfo, max_width_pts: float):
         """Add an image to a table cell."""
         if not img.data:
             return
-        
+
         try:
-            image_stream = io.BytesIO(img.data)
-            
-            # Calculate size for cell
-            img_width_ratio = img.width / max_width if max_width > 0 else 0.5
-            width_inches = min(img_width_ratio * 3.0, 2.8)
-            width_inches = max(width_inches, 0.5)
-            
+            # Prepare image data
+            image_data = self._prepare_image_data(img.data, img.ext)
+            if not image_data:
+                return
+
+            image_stream = io.BytesIO(image_data)
+
+            # Convert max_width from points to inches
+            max_width_inches = max_width_pts / 72 if max_width_pts > 0 else 3.0
+
+            # Calculate size for cell while preserving aspect ratio
+            if img.width > 0:
+                img_width_inches = img.width / 72  # Convert points to inches
+                width_inches = min(img_width_inches, max_width_inches * 0.9)  # 90% of cell width max
+            else:
+                width_inches = max_width_inches * 0.5
+
+            width_inches = max(width_inches, 0.5)  # Min 0.5 inch
+
             para = cell.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = para.add_run()
             run.add_picture(image_stream, width=Inches(width_inches))
-            
+
+            # Minimal spacing
+            para.paragraph_format.space_before = Pt(3)
+            para.paragraph_format.space_after = Pt(3)
+
             self._image_count += 1
-            
+
         except Exception as e:
             self._errors.append(f"Cell image error: {e}")
     
